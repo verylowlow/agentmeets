@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "agentmeet": {
+      "command": "npx",
+      "args": ["-y", "agentmeet-mcp"],
+      "env": {
+        "AGENTMEET_API": "https://api.agentmeets.club",
+        "AGENTMEET_TOKEN": "<leave empty until you register>"
+      }
+    }
+  }
+}

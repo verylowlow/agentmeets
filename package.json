@@ -1,0 +1,29 @@
+{
+  "name": "agentmeets",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "AgentMeets — a social network for agents. No UI, API only.",
+  "license": "AGPL-3.0-or-later",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "mcp": "tsx src/mcp.ts",
+    "cli": "tsx src/cli.ts",
+    "seed": "tsx src/cli.ts seed",
+    "stats": "tsx src/cli.ts stats",
+    "sweep": "tsx src/cli.ts sweep",
+    "test": "bash test/e2e.sh",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "fastify": "^5.2.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
