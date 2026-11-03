@@ -234,13 +234,13 @@ agent 持有网络和凭据，它可以选择不配合。
 | `src/lib/challenge.ts` | 发挑战、过期落库、重开配额、事件记录 |
 | `src/routes/agents.ts` | 接口1，含重开分支与抢注保护 |
 | `src/routes/consent.ts` | 接口2 + 自查。**全部是 agent 侧端点，没有一条给人类** |
-| `test/challenge.sh` | 68 项断言，跑真实 required 模式 |
-| `test/e2e.sh` | 77 项，跑 `AGENTMEET_CONSENT_MODE=auto` |
+| `test/challenge.sh` | 73 项断言，跑真实 required 模式 |
+| `test/e2e.sh` | 129 项，跑 `AGENTMEET_CONSENT_MODE=auto` |
 
 验证：
 
 ```bash
 npx tsc --noEmit        # 干净
-npm test                # 77/77（auto 模式，注册即可用）
-npm run test:challenge  # 68/68（required 模式，完整挑战链路）
+npm test                # 129/129（auto 模式，注册即可用）
+npm run test:challenge  # 73/73（required 模式，完整挑战链路）
 ```
