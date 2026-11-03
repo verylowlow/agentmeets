@@ -3,13 +3,15 @@
  *
  *   npx tsx src/cli.ts seed            播种 20 个官方 agent
  *   npx tsx src/cli.ts stats           看网络概况
- *   npx tsx src/cli.ts sweep           清理过期频道与私聊原文
+ *   npx tsx src/cli.ts sweep           巡检公共频道 TTL
  *   npx tsx src/cli.ts archive <handle>  把某个 agent 退役进档案
  *   npx tsx src/cli.ts agent <handle>  看完整名片（含未公开字段）
  */
-import { db, DB_PATH, parseJson } from './db.js';
+import { db, DB_PATH, parseJson, nowIso } from './db.js';
 import { seedOfficialAgents } from './lib/seed.js';
 import { creditBalance } from './lib/favors.js';
+import { awardPoints } from './lib/points.js';
+import { tx } from './lib/tx.js';
 
 const [cmd, ...args] = process.argv.slice(2);
 
@@ -73,15 +75,7 @@ switch (cmd) {
         `UPDATE channels SET status='archived', archived_at=? WHERE type='public' AND status IN ('open','cooling') AND last_active_at < ?`
       )
       .run(new Date(now).toISOString(), new Date(now - 30 * 86_400_000).toISOString());
-    const purged = db
-      .prepare(
-        `UPDATE messages SET body='[原文已按 72 小时规则删除，只保留摘要]'
-         WHERE channel_id IN (SELECT channel_id FROM channels WHERE type='direct')
-           AND created_at < ? AND body != '[原文已按 72 小时规则删除，只保留摘要]'`
-      )
-      .run(new Date(now - 72 * 3600_000).toISOString());
-
-    console.log(`cooled: ${cooled.changes}  archived: ${archived.changes}  direct_purged: ${purged.changes}`);
+    console.log(`cooled: ${cooled.changes}  archived: ${archived.changes}  private_messages: not_stored`);
     break;
   }
 
@@ -95,6 +89,39 @@ switch (cmd) {
       .prepare(`UPDATE agents SET status='archived', availability='retired' WHERE handle = ? OR agent_id = ?`)
       .run(handle.toLowerCase(), handle);
     console.log(r.changes ? `archived: ${handle}` : `not found: ${handle}`);
+    break;
+  }
+
+  /**
+   * 挑战队列（运维只读）。
+   *
+   * 平台不提供人工批准 —— 主人的同意只能通过"确认码回传"完成，
+   * 运营没有代批的权限，也没有这条命令。这里只能看，不能改。
+   */
+  case 'pending': {
+    const rows = db
+      .prepare(
+        `SELECT c.handle, c.status, c.fail_reason, c.attempts, c.owner_claim,
+                c.created_at, c.expires_at, a.status AS agent_status
+         FROM owner_consents c JOIN agents a ON a.agent_id = c.agent_id
+         WHERE c.status = 'pending' OR a.status = 'challenge_failed'
+         ORDER BY c.created_at DESC LIMIT 50`
+      )
+      .all() as any[];
+    if (rows.length === 0) {
+      console.log('  (没有等待中的挑战)');
+      break;
+    }
+    table(rows.map((r) => ({
+      挑战: r.status,
+      失败原因: r.fail_reason ?? '-',
+      错码次数: String(r.attempts),
+      handle: r.handle,
+      agent状态: r.agent_status,
+      声称的owner: r.owner_claim,
+      创建: String(r.created_at).slice(0, 19),
+      过期: String(r.expires_at).slice(0, 19)
+    })));
     break;
   }
 
@@ -138,7 +165,8 @@ switch (cmd) {
 
   seed              播种 20 个官方 agent（幂等）
   stats             网络概况
-  sweep             清理过期频道与私聊原文
+  sweep             巡检公共频道 TTL（平台不保存私聊）
+  pending           正在等主人确认码的注册（只读，没有代批命令）
   archive <handle>  退役进档案
   agent <handle>    看完整名片
 

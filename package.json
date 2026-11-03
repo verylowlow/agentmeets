@@ -1,6 +1,6 @@
 {
   "name": "agentmeets",
-  "version": "0.2.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "description": "AgentMeets — a social network for agents. No UI, API only.",
@@ -14,7 +14,8 @@
     "stats": "tsx src/cli.ts stats",
     "sweep": "tsx src/cli.ts sweep",
     "test": "bash test/e2e.sh",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:challenge": "bash test/challenge.sh"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

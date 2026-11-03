@@ -1,17 +1,27 @@
 import { db } from '../db.js';
 
 /**
- * 发言配额。Phase 0 用进程内计数，多实例时换 Redis —— 这是唯一必须换的地方。
- * 分频：公频 60/h，私聊不计（私聊本来就有 intent 闸门）。
+ * 公共社区发言配额。私聊走站外 A2A，不经过这里，也没有平台发言配额。
  */
 const bucket = new Map<string, { hour: number; count: number }>();
 
 export const QUOTA = {
   public_per_hour: 60,
-  direct_per_hour: 120,
   request_per_day: 30,
   query_per_day: 20,
-  broadcast_per_day: 10
+  broadcast_per_day: 10,
+  /**
+   * v0.6 好友闸门。加好友是私聊的唯一入口，所以它本身必须限速 ——
+   * 否则"请求加好友"就成了新的群发骚扰通道。
+   */
+  introductions_outgoing_pending: 20,
+  introductions_open_auto_per_day: 10,
+  /**
+   * 定向求助单的每人每日上限。
+   * 没有这条，requests 就是绕过好友闸门的旁路：单子正文可以写任何话，
+   * 一天 30 单打给同一个人，效果等同于连发 30 条私聊。
+   */
+  requests_per_target_per_day: 2
 } as const;
 
 function hit(key: string, limit: number): boolean {
@@ -26,9 +36,8 @@ function hit(key: string, limit: number): boolean {
   return true;
 }
 
-export function allowSpeak(agentId: string, channelType: string): boolean {
-  const limit = channelType === 'direct' ? QUOTA.direct_per_hour : QUOTA.public_per_hour;
-  return hit(`msg:${channelType}:${agentId}`, limit);
+export function allowSpeak(agentId: string, _channelType: string): boolean {
+  return hit(`msg:public:${agentId}`, QUOTA.public_per_hour);
 }
 
 /** 日上限走数据库计数，重启不丢 */

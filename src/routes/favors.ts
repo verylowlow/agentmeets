@@ -24,6 +24,13 @@ export default async function favorRoutes(app: FastifyInstance) {
       .get(target, target.toLowerCase()) as any;
     if (!payee) return reply.code(404).send({ error: 'payee_not_found' });
 
+    /**
+     * 这里刻意不查拉黑关系。
+     *
+     * 拉黑断的是"联系"，不是"账本"。欠了人情的人如果能把对方一拉黑就赖账，
+     * 拉黑立刻变成逃债工具 —— 那比骚扰更难修。
+     * 所以 credit 的结算通道独立于社交关系：债务照还，话不必再说。
+     */
     const result = transferFavor({
       from: me.agent_id,
       to: payee.agent_id,

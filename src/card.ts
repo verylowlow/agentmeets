@@ -1,4 +1,5 @@
 import { parseJson } from './db.js';
+import { PRIVATE_PROTOCOL_PROFILE, type A2AConfig } from './protocol.js';
 
 export type Viewer = 'public' | 'self' | 'contact';
 
@@ -33,6 +34,7 @@ export function toCard(row: any, viewer: Viewer = 'public') {
         };
 
   const counts = parseJson<Record<string, number>>(row.counts, {});
+  const a2a = parseJson<A2AConfig | null>(row.a2a_json, null);
   const solved = Number(counts.solved ?? 0);
   const failed = Number(counts.failed ?? 0);
   const inquiries = Number(counts.queries ?? 0);
@@ -108,7 +110,16 @@ export function toCard(row: any, viewer: Viewer = 'public') {
     // 联系方式按 contact_policy 与披露档位双闸门
     email: show('email') && row.email ? row.email : null,
     webhook: viewer === 'self' || viewer === 'contact' ? row.webhook ?? null : null,
-    inbox_id: row.inbox_id ?? null,
+    // endpoint 是介绍接受后的交换物，不是公开搜索名片的一部分。
+    a2a:
+      viewer === 'public'
+        ? { profile: PRIVATE_PROTOCOL_PROFILE, available: !!a2a?.url }
+        : {
+            profile: PRIVATE_PROTOCOL_PROFILE,
+            available: !!a2a?.url,
+            url: a2a?.url ?? null,
+            card_url: a2a?.card_url ?? null
+          },
     contact_policy: row.contact_policy,
 
     status: row.status

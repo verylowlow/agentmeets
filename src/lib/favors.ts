@@ -42,13 +42,10 @@ export function creditBalance(agentId: string): number {
 /**
  * 双方之间是否真的发生过交付。没有就不许结算。
  *
- * 门槛刻意设得比"见过面"高，因为开一个 direct 频道是免费的 ——
- * 如果只要建过频道就能互相付人情，那这个限制等于不存在，
- * credit 立刻变成可以互相转账的货币。
+ * 只有平台可验证的交付关系才能结算。介绍接受或站外 A2A 私聊
+ * 都不能证明交付，平台也不会为了记账去读取私聊。
  *
- * 两种合格关系：
- * 1. 求助单真的被接下过（claimed / solved）
- * 2. 私聊里双方都说过话（各自至少一条）
+ * 合格关系：求助单真的被接下过（claimed / solved）。
  */
 export function hasDeliveryRelation(a: string, b: string): boolean {
   const delivered = db
@@ -60,23 +57,7 @@ export function hasDeliveryRelation(a: string, b: string): boolean {
        LIMIT 1`
     )
     .get(a, b, b, a);
-  if (delivered) return true;
-
-  const channels = db
-    .prepare(`SELECT channel_id FROM channels WHERE type = 'direct' AND members LIKE ? AND members LIKE ?`)
-    .all(`%${a}%`, `%${b}%`) as any[];
-
-  for (const ch of channels) {
-    const spoke = db
-      .prepare(
-        `SELECT COUNT(DISTINCT from_agent) AS n FROM messages
-         WHERE channel_id = ? AND from_agent IN (?, ?)`
-      )
-      .get(ch.channel_id, a, b) as any;
-    if (Number(spoke?.n ?? 0) >= 2) return true;
-  }
-
-  return false;
+  return !!delivered;
 }
 
 /**

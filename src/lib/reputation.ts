@@ -42,42 +42,71 @@ export function setCount(agentId: string, key: keyof Counts, value: number): voi
 /**
  * 回访判定：同一个 agent 第二次找同一个人。
  * 这是最硬的信号 —— 骗一次可以，骗不了两次。
+ *
+ * v0.6 起双写：一次交互在双方通讯录里各留一行。
+ * 为什么必须双写：通讯录是"我认识谁"，不是"我找过谁"。
+ * 只写发起方，帮过 100 个人的 agent 通讯录里只有它主动找过的几个，
+ * 而被它帮助过的人全部消失 —— 那恰好是质量最高的一批关系。
+ *
+ * 返回值为发起方视角的"这是不是一次回访"，语义与 v0.5 完全一致。
  */
 export function recordRelation(
   ownerAgent: string,
   otherAgent: string,
-  kind: 'request' | 'favor'
+  kind: 'request' | 'favor' | 'introduction'
 ): boolean {
   const ts = nowIso();
+  const revisit = touchRelation(ownerAgent, otherAgent, kind, 'out', ts);
+  touchRelation(otherAgent, ownerAgent, kind, 'in', ts);
+  return revisit;
+}
+
+/**
+ * 写单侧关系行。
+ * dir='out' 是我对别人做了什么，dir='in' 是别人对我做了什么 —— 两侧各自记账，互不抵消。
+ */
+function touchRelation(
+  ownerAgent: string,
+  otherAgent: string,
+  kind: 'request' | 'favor' | 'introduction',
+  dir: 'out' | 'in',
+  ts: string
+): boolean {
   const existing = db
     .prepare('SELECT * FROM relations WHERE owner_agent = ? AND other_agent = ?')
     .get(ownerAgent, otherAgent) as any;
 
+  const reqCol = dir === 'out' ? 'requests_out' : 'requests_in';
+  const favCol = dir === 'out' ? 'favors_out' : 'favors_in';
+
   if (!existing) {
     db.prepare(
-      `INSERT INTO relations (owner_agent, other_agent, requests_out, favors_out, first_at, last_at)
-       VALUES (?,?,?,?,?,?)`
+      `INSERT INTO relations
+         (owner_agent, other_agent, requests_out, requests_in, favors_out, favors_in, first_at, last_at)
+       VALUES (?,?,?,?,?,?,?,?)`
     ).run(
       ownerAgent,
       otherAgent,
-      kind === 'request' ? 1 : 0,
-      kind === 'favor' ? 1 : 0,
+      kind === 'request' && dir === 'out' ? 1 : 0,
+      kind === 'request' && dir === 'in' ? 1 : 0,
+      kind === 'favor' && dir === 'out' ? 1 : 0,
+      kind === 'favor' && dir === 'in' ? 1 : 0,
       ts,
       ts
     );
     return false;
   }
 
-  db.prepare(
-    `UPDATE relations SET
-       requests_out = requests_out + ?,
-       favors_out = favors_out + ?,
-       last_at = ?
-     WHERE owner_agent = ? AND other_agent = ?`
-  ).run(kind === 'request' ? 1 : 0, kind === 'favor' ? 1 : 0, ts, ownerAgent, otherAgent);
+  const sets: string[] = ['last_at = ?'];
+  if (kind === 'request') sets.push(`${reqCol} = ${reqCol} + 1`);
+  if (kind === 'favor') sets.push(`${favCol} = ${favCol} + 1`);
 
-  // 第二次（或更多）才算回访
-  return kind === 'request' && Number(existing.requests_out) >= 1;
+  db.prepare(
+    `UPDATE relations SET ${sets.join(', ')} WHERE owner_agent = ? AND other_agent = ?`
+  ).run(ts, ownerAgent, otherAgent);
+
+  // 第二次（或更多）才算回访；只有 out 方向定义回访
+  return kind === 'request' && dir === 'out' && Number(existing.requests_out) >= 1;
 }
 
 /** 重算某 agent 的回访率分母（去重请求方数量） */

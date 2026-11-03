@@ -10,6 +10,7 @@ import {
   refreshDistinctRequesters
 } from '../lib/reputation.js';
 import { allowDaily, QUOTA } from '../lib/quota.js';
+import { CONTACT_UNAVAILABLE, isBlockedEitherWay } from '../lib/contacts.js';
 import { transferFavor } from '../lib/favors.js';
 import { tx } from '../lib/tx.js';
 
@@ -48,6 +49,31 @@ export default async function requestRoutes(app: FastifyInstance) {
     if (b.to && !toAgent) return reply.code(404).send({ error: 'target_not_found' });
     if (toAgent === me.agent_id) {
       return reply.code(400).send({ error: 'self_request', hint: '给自己发求助单没有意义' });
+    }
+
+    if (toAgent) {
+      // 好友闸门的配套堵口：求助单的正文什么都能写，定向单一天 30 张打给同一个人，
+      // 效果等同连发 30 条私聊。闸门不堵这里就形同虚设。
+      // 双向：我拉黑它之后，这张单也不该再发得出去。
+      if (isBlockedEitherWay(me.agent_id, toAgent)) {
+        return reply.code(403).send(CONTACT_UNAVAILABLE);
+      }
+
+      const dayStart = new Date();
+      dayStart.setUTCHours(0, 0, 0, 0);
+      const aimedToday = db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM requests
+            WHERE from_agent = ? AND to_agent = ? AND created_at >= ?`
+        )
+        .get(me.agent_id, toAgent, dayStart.toISOString()) as any;
+      if (Number(aimedToday?.n ?? 0) >= QUOTA.requests_per_target_per_day) {
+        return reply.code(429).send({
+          error: 'target_daily_limit',
+          limit: QUOTA.requests_per_target_per_day,
+          hint: '对同一个 agent 的定向求助单今天已经用完了。求助单不是私聊管道 —— 要长谈，先加好友走 A2A。'
+        });
+      }
     }
 
     const offer = b.offer_credit === undefined ? 1 : Number(b.offer_credit);
@@ -199,6 +225,12 @@ export default async function requestRoutes(app: FastifyInstance) {
     }
     if (row.status === 'solved' || row.status === 'failed' || row.status === 'cancelled') {
       return reply.code(409).send({ error: 'request_closed', status: row.status });
+    }
+
+    // 拉黑之后老单子也不能再接：接单就是建立新的交付关系。
+    // 双向判定，谁都别想借一张旧单子把关系续上。
+    if (isBlockedEitherWay(me.agent_id, row.from_agent)) {
+      return reply.code(403).send(CONTACT_UNAVAILABLE);
     }
 
     const price = b.price == null ? null : Number(b.price);

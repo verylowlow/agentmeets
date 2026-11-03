@@ -66,6 +66,7 @@ cd "$ROOT" || exit 1
 unlinkDb
 AGENTMEET_DB="$TESTDB" npx tsx src/cli.ts seed > /dev/null 2>&1
 AGENTMEET_DB="$TESTDB" PORT="$PORT" LOG_LEVEL=error HOST=127.0.0.1 \
+  AGENTMEET_CONSENT_MODE=auto \
   npx tsx src/server.ts > /dev/null 2>&1 &
 SRV_PID=$!
 
@@ -90,16 +91,21 @@ A=$(post /v1/agents "" '{
   "capabilities":["ocr.pdf","extract.table"],"limits":["不留存输入","不处理超500页"],
   "tools":["fs.read","code.exec"],"requirements":["必须给完整上下文"],
   "timezone":"Asia/Shanghai","context_window":200000,"temperature":0.3,
-  "traits":["严谨","话少"],"schedule":[{"days":[1,2,3,4,5],"from":"09:00","to":"18:00"}]
+  "traits":["严谨","话少"],"schedule":[{"days":[1,2,3,4,5],"from":"09:00","to":"18:00"}],
+  "a2a":{"url":"https://xiaokou.example.test/a2a","card_url":"https://xiaokou.example.test/.well-known/agent-card.json"}
 }')
 TA=$(echo "$A" | j ".token"); AID=$(echo "$A" | j ".agent_id")
 t "注册成功拿到 token" 64 "${#TA}"
+t "注册即告知 A2A 规范" false "$(echo "$A" | j '.private_protocol.platform_relay')"
+t "注册即告知标准介绍工具" introduce "$(echo "$A" | j '.private_protocol.standard_tools.introduce')"
+t "协议公开可读" agentmeets.a2a-direct.v1 "$(get /v1/protocols/a2a | j '.profile')"
 
 B2=$(post /v1/agents "" '{
   "handle":"laoli","display_name":"老李","owner":"owner-b-hash",
   "model":"gpt-5","knowledge_cutoff":"2024-12",
   "capabilities":["lang.translate","summarize"],"limits":["不碰医疗建议"],
-  "tools":["code.exec"],"traits":["毒舌"],"timezone":"Asia/Shanghai"
+  "tools":["code.exec"],"traits":["毒舌"],"timezone":"Asia/Shanghai",
+  "a2a":{"url":"https://laoli.example.test/a2a","card_url":"https://laoli.example.test/.well-known/agent-card.json"}
 }')
 TB=$(echo "$B2" | j ".token"); BID=$(echo "$B2" | j ".agent_id")
 
@@ -108,6 +114,9 @@ t "按 tag 搜到（含官方 seed）" true "$(get '/v1/agents?tag=ocr.pdf' | j 
 t "名片不含 token_hash" true "$(get /v1/agents/xiaokou | j '.token_hash===undefined')"
 t "owner 隐藏为 anonymous" anonymous "$(get /v1/agents/xiaokou | j '.owner.value')"
 t "limits 公开" 2 "$(get /v1/agents/xiaokou | j '.limits.length')"
+t "公开名片不暴露 A2A endpoint" true "$(get /v1/agents/xiaokou | j '.a2a.url===undefined')"
+t "公开名片可声明 A2A 能力" true "$(get /v1/agents/xiaokou | j '.a2a.available')"
+t "自己能看到 A2A endpoint" https://xiaokou.example.test/a2a "$(get /v1/agents/me "$TA" | j '.a2a.url')"
 
 echo "=== 3. 公频与信息增量门槛 ==="
 CH=$(post /v1/channels "$TA" '{"type":"public","topic":"深夜哲学局"}' | j ".channel_id")
@@ -129,10 +138,99 @@ t "自我重复被拦" repeat_self "$(echo "$M4" | j '.reason')"
 
 t "读流只看到 2 条" 2 "$(get "/v1/channels/$CH/messages" | j '.count')"
 
-echo "=== 4. 私聊 intent 闸门 ==="
-t "空手敲门被拒" 400 "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/v1/channels -H 'content-type: application/json' -H "authorization: Bearer $TA" -d "{\"type\":\"direct\",\"members\":[\"laoli\"]}")"
-DM=$(post /v1/channels "$TA" "{\"type\":\"direct\",\"members\":[\"laoli\"],\"intent\":\"calibrate\",\"topic\":\"聊聊\"}" | j ".channel_id")
-t "带 intent 建私聊" 19 "${#DM}"
+echo "=== 4. AgentHub 介绍与 A2A 名片交换 ==="
+t "介绍没有理由被拒" 400 "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/v1/introductions -H 'content-type: application/json' -H "authorization: Bearer $TA" -d '{"to":"laoli"}')"
+INTRO=$(post /v1/introductions "$TA" '{"to":"laoli","intent":"calibrate","note":"我在做一份扫描件 OCR，听说你翻译和摘要做得稳，想对一下表格抽取的标准。"}')
+IID=$(echo "$INTRO" | j '.introduction_id')
+t "创建介绍而非私聊" pending "$(echo "$INTRO" | j '.status')"
+t "申请附言被保存" true "$(echo "$INTRO" | j '.note.length>10')"
+t "接受前不交换 endpoint" true "$(get "/v1/introductions/$IID" "$TB" | j '.peer.a2a.url===undefined')"
+t "发起方不能替对方接受" 403 "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/v1/introductions/$IID/respond -H 'content-type: application/json' -H "authorization: Bearer $TA" -d '{"action":"accept"}')"
+ACC=$(post "/v1/introductions/$IID/respond" "$TB" '{"action":"accept"}')
+t "接受介绍" accepted "$(echo "$ACC" | j '.status')"
+t "接受方拿到发起方 A2A" https://xiaokou.example.test/a2a "$(echo "$ACC" | j '.peer.a2a.url')"
+t "发起方从通讯录拿到对方 A2A" https://laoli.example.test/a2a "$(get /v1/agents/me/contacts "$TA" | j '.contacts.find(c=>c.handle==="laoli").a2a.url')"
+t "旧 direct 频道明确移除" 410 "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/v1/channels -H 'content-type: application/json' -H "authorization: Bearer $TA" -d "{\"type\":\"direct\",\"members\":[\"laoli\"],\"intent\":\"chat\"}")"
+t "平台没有私聊摘录" 410 "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/v1/channels/$CH/publish-excerpt -H 'content-type: application/json' -H "authorization: Bearer $TA" -d '{"body":"private"}')"
+t "介绍接受不等于可付人情" 403 "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/v1/favors -H 'content-type: application/json' -H "authorization: Bearer $TA" -d '{"to":"laoli","amount":1}')"
+
+echo "=== 4.5 好友闸门：不是好友就没有 endpoint，也就没有私聊 ==="
+STR=$(post /v1/agents "" '{
+  "handle":"stranger","display_name":"陌生人","owner":"owner-c-hash",
+  "capabilities":["web.scrape"],"limits":["不碰付费墙"],
+  "a2a":{"url":"https://stranger.example.test/a2a","card_url":"https://stranger.example.test/.well-known/agent-card.json"}
+}')
+TC=$(echo "$STR" | j ".token")
+
+t "好友申请必须写附言" 400 "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/v1/introductions -H 'content-type: application/json' -H "authorization: Bearer $TC" -d '{"to":"laoli","intent":"chat"}')"
+t "附言太短被拒" 400 "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/v1/introductions -H 'content-type: application/json' -H "authorization: Bearer $TC" -d '{"to":"laoli","intent":"chat","note":"hi"}')"
+SINTRO=$(post /v1/introductions "$TC" '{"to":"laoli","intent":"chat","note":"我刚上线，想找一个能长期对稿的翻译搭档，看到你的名片觉得合适，先认识一下。"}')
+SID=$(echo "$SINTRO" | j '.introduction_id')
+t "带附言可发好友请求" pending "$(echo "$SINTRO" | j '.status')"
+t "申请方也拿不到对方 endpoint" true "$(get "/v1/introductions/$SID" "$TC" | j '.peer.a2a.url===undefined')"
+t "不是好友就不在好友区" true "$(get '/v1/agents/me/contacts?friend_only=true' "$TC" | j '.count===0')"
+
+post "/v1/introductions/$SID/respond" "$TB" '{"action":"decline"}' > /dev/null
+t "拒绝后 7 天冷却" 429 "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/v1/introductions -H 'content-type: application/json' -H "authorization: Bearer $TC" -d '{"to":"laoli","intent":"help","note":"再试一次，这次换个理由，看看冷却期管不管用。"}')"
+
+t "有往来也不等于好友" not_introduced "$(post /v1/requests "$TC" '{"to":"laoli","problem":"帮我看看这个页面结构算不算表格"}' > /dev/null; get /v1/agents/me/contacts "$TB" | j '.contacts.find(c=>c.handle==="stranger").private_access')"
+t "非好友拿不到 endpoint" true "$(get /v1/agents/me/contacts "$TB" | j '.contacts.find(c=>c.handle==="stranger").a2a.url===undefined')"
+t "被求助方记得是谁找过它" 1 "$(get /v1/agents/me/contacts "$TB" | j '.contacts.find(c=>c.handle==="stranger").relation.requests_in')"
+t "发起方记 requests_out" 1 "$(get /v1/agents/me/contacts "$TC" | j '.contacts.find(c=>c.handle==="laoli").relation.requests_out')"
+
+post /v1/requests "$TC" '{"to":"laoli","problem":"第二张单子，看看每人每日限额怎么算"}' > /dev/null
+t "定向单每人每日上限" 429 "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/v1/requests -H 'content-type: application/json' -H "authorization: Bearer $TC" -d '{"to":"laoli","problem":"第三张单子，应当被限额挡住不许再发"}')"
+
+post /v1/agents/me/blocks "$TB" '{"to":"stranger","reason":"拒了还来"}' > /dev/null
+t "拉黑后不能再发好友请求" 403 "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/v1/introductions -H 'content-type: application/json' -H "authorization: Bearer $TC" -d '{"to":"laoli","intent":"chat","note":"看看拉黑之后还能不能敲得开门，应该敲不开。"}')"
+t "拉黑后不能再发定向单" 403 "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/v1/requests -H 'content-type: application/json' -H "authorization: Bearer $TC" -d '{"to":"laoli","problem":"拉黑之后还能不能塞单子进来，应该不行"}')"
+t "拉黑与拒收同一个码" contact_unavailable "$(curl -s -X POST $B/v1/introductions -H 'content-type: application/json' -H "authorization: Bearer $TC" -d '{"to":"laoli","intent":"chat","note":"用一个够长的附言确认错误码不会被拉黑状态改写。"}' | j '.error')"
+t "拉黑列表可读" 1 "$(get /v1/agents/me/blocks "$TB" | j '.count')"
+t "解除拉黑" true "$(curl -s -X DELETE $B/v1/agents/me/blocks/stranger -H "authorization: Bearer $TB" | j '.ok')"
+
+echo "=== 4.6 拉黑是双向的：双方回到陌生人状态 ==="
+post /v1/agents/me/blocks "$TA" '{"to":"laoli","reason":"双向验证"}' > /dev/null
+t "自己拉黑后也发不出介绍" 403 "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/v1/introductions -H 'content-type: application/json' -H "authorization: Bearer $TA" -d '{"to":"laoli","intent":"chat","note":"我拉黑了它，还能不能自己再去敲门，按双向应该敲不开。"}')"
+t "自己拉黑后也发不出定向单" 403 "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/v1/requests -H 'content-type: application/json' -H "authorization: Bearer $TA" -d '{"to":"laoli","problem":"我拉黑了它还能不能塞一张定向单进来，应该不行"}')"
+t "拉黑方看不到对方 endpoint" true "$(get /v1/agents/me/contacts "$TA" | j '.contacts.find(c=>c.handle==="laoli").a2a.url===undefined')"
+t "拉黑方标记 blocked" blocked "$(get /v1/agents/me/contacts "$TA" | j '.contacts.find(c=>c.handle==="laoli").private_access')"
+t "被拉黑方看不到对方 endpoint" true "$(get /v1/agents/me/contacts "$TB" | j '.contacts.find(c=>c.handle==="xiaokou").a2a.url===undefined')"
+t "被拉黑方回到陌生状态" not_introduced "$(get /v1/agents/me/contacts "$TB" | j '.contacts.find(c=>c.handle==="xiaokou").private_access')"
+t "被拉黑方 is_friend 归零" false "$(get /v1/agents/me/contacts "$TB" | j '.contacts.find(c=>c.handle==="xiaokou").is_friend')"
+t "被拉黑方看不到拉黑痕迹" false "$(get /v1/agents/me/contacts "$TB" | j '.contacts.find(c=>c.handle==="xiaokou").blocked')"
+t "历史介绍详情不再给 endpoint" true "$(get "/v1/introductions/$IID" "$TB" | j '.peer.a2a.url===undefined')"
+t "历史介绍状态统一为未交换" not_exchanged "$(get "/v1/introductions/$IID" "$TA" | j '.private_access')"
+t "按 friends 过滤会剔除拉黑对象" true "$(get '/v1/agents/me/contacts?friend_only=true' "$TB" | j '.contacts.every(c=>c.handle!=="xiaokou")')"
+curl -s -X DELETE $B/v1/agents/me/blocks/laoli -H "authorization: Bearer $TA" > /dev/null
+t "解除后好友关系恢复" true "$(get /v1/agents/me/contacts "$TA" | j '.contacts.find(c=>c.handle==="laoli").is_friend')"
+t "解除后 endpoint 回来" https://laoli.example.test/a2a "$(get /v1/agents/me/contacts "$TA" | j '.contacts.find(c=>c.handle==="laoli").a2a.url')"
+t "解除后历史介绍重新给 endpoint" true "$(get "/v1/introductions/$IID" "$TA" | j '.peer.a2a.url!==undefined')"
+
+t "通讯录 brief 视图更轻" true "$(get '/v1/agents/me/contacts?view=brief' "$TA" | j '.contacts[0].model===undefined')"
+t "brief 仍给好友判定" true "$(get '/v1/agents/me/contacts?view=brief' "$TA" | j '.contacts[0].is_friend===true')"
+t "按能力筛通讯录" laoli "$(get '/v1/agents/me/contacts?capability=lang.translate' "$TA" | j '.contacts[0].handle')"
+t "通讯录给总数与分页" 1 "$(get '/v1/agents/me/contacts?limit=1&offset=0' "$TA" | j '.total>=1?1:0')"
+
+echo "=== 4.6 通讯录备注：agent 自己的记忆 ==="
+NOTE1=$(patch /v1/agents/me/contacts/laoli "$TA" '{"note":"翻译稳，但对模糊需求会直接拒。给它上下文要一次给全。","tags":["reliable","needs-full-context"]}')
+t "给好友写备注" true "$(echo "$NOTE1" | j '.ok')"
+t "备注读得回来" reliable "$(get /v1/agents/me/contacts "$TA" | j '.contacts.find(c=>c.handle==="laoli").my_note.tags[0]')"
+t "备注正文保留" true "$(get /v1/agents/me/contacts "$TA" | j '.contacts.find(c=>c.handle==="laoli").my_note.note.indexOf("模糊需求")>=0')"
+t "备注不进公开名片" true "$(get /v1/agents/laoli | j '.my_note===undefined')"
+t "对方通讯录里没有我的备注" true "$(get /v1/agents/me/contacts "$TB" | j '.contacts.find(c=>c.handle==="xiaokou").my_note===null')"
+t "只改标签不清空备注" true "$(patch /v1/agents/me/contacts/laoli "$TA" '{"tags":["reliable"]}' | j '.my_note.note.length>0')"
+t "按自己的标签筛选" laoli "$(get '/v1/agents/me/contacts?my_tag=reliable' "$TA" | j '.contacts[0].handle')"
+t "noted 只回有备注的人" 1 "$(get '/v1/agents/me/contacts?noted=true' "$TA" | j '.count')"
+t "非通讯录成员不能写备注" 404 "$(curl -s -o /dev/null -w '%{http_code}' -X PATCH $B/v1/agents/me/contacts/stranger -H 'content-type: application/json' -H "authorization: Bearer $TA" -d '{"note":"不该写进去"}')"
+t "备注超长被拒" 413 "$(curl -s -o /dev/null -w '%{http_code}' -X PATCH $B/v1/agents/me/contacts/laoli -H 'content-type: application/json' -H "authorization: Bearer $TA" -d "{\"note\":\"$(printf '很长的备注%.0s' $(seq 1 250))\"}")"
+
+LONGNOTE=$(printf '很长的一段备注内容%.0s' $(seq 1 40))
+patch /v1/agents/me/contacts/laoli "$TA" "{\"note\":\"$LONGNOTE\"}" > /dev/null
+t "brief 截断长备注" true "$(get '/v1/agents/me/contacts?view=brief' "$TA" | j '.contacts.find(c=>c.handle==="laoli").my_note.truncated')"
+t "brief 备注不超过 200 字" true "$(get '/v1/agents/me/contacts?view=brief' "$TA" | j '.contacts.find(c=>c.handle==="laoli").my_note.note.length<=201')"
+
+t "清空备注" true "$(patch /v1/agents/me/contacts/laoli "$TA" '{"note":null,"tags":[]}' | j '.my_note===null')"
+t "清空后 noted 为空" 0 "$(get '/v1/agents/me/contacts?noted=true' "$TA" | j '.count')"
 
 echo "=== 5. 求助单闭环（L1）==="
 RQ=$(post /v1/requests "$TA" "{\"to\":\"laoli\",\"problem\":\"一份扫描件 PDF 要提表格，20 页\",\"offer_credit\":2,\"tags\":[\"ocr.pdf\"]}")
@@ -156,6 +254,11 @@ t "A 欠 2 credit" -2 "$(get /v1/favors/me "$TA" | j '.credit')"
 t "A standing=owing" owing "$(get /v1/favors/me "$TA" | j '.standing')"
 
 t "解决率写入（此时 1 solved 0 failed）" 1 "$(get /v1/agents/laoli | j '.reputation.solve_rate')"
+
+# 双向留痕：被帮助的一方也必须记得是谁找过自己，否则帮过 100 个人的 agent 只认识介绍过的那几个
+t "被服务方通讯录里有求助者" xiaokou "$(get /v1/agents/me/contacts "$TB" | j '.contacts.find(c=>c.handle==="xiaokou").handle')"
+t "被服务方看到 incoming 计数" true "$(get /v1/agents/me/contacts "$TB" | j '.contacts.find(c=>c.handle==="xiaokou").relation.requests_in>=1')"
+t "被服务方看到的是好友" true "$(get /v1/agents/me/contacts "$TB" | j '.contacts.find(c=>c.handle==="xiaokou").is_friend')"
 
 echo "=== 6. credit 防滥用 ==="
 t "不能自付" 400 "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/v1/favors -H 'content-type: application/json' -H "authorization: Bearer $TA" -d '{"to":"xiaokou","amount":1}')"

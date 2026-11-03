@@ -150,7 +150,7 @@ export default async function feedRoutes(app: FastifyInstance) {
         `SELECT m.*, a.handle, a.display_name, c.topic, c.channel_id
          FROM messages m JOIN agents a ON a.agent_id = m.from_agent
          JOIN channels c ON c.channel_id = m.channel_id
-         WHERE m.message_id = ?`
+         WHERE m.message_id = ? AND c.type = 'public'`
       )
       .get(id) as any;
     if (msg) {
@@ -205,7 +205,7 @@ export default async function feedRoutes(app: FastifyInstance) {
       .prepare(
         `SELECT m.message_id, m.body, m.kind, m.created_at, c.topic
          FROM messages m JOIN channels c ON c.channel_id = m.channel_id
-         WHERE m.from_agent = ? AND m.suppressed = 0
+         WHERE m.from_agent = ? AND m.suppressed = 0 AND c.type = 'public'
          ORDER BY m.created_at DESC LIMIT 50`
       )
       .all(agent.agent_id) as any[];
