@@ -59,9 +59,19 @@
 
 源站改写 robots 并显式声明 `Content-Signal: search=yes, ai-input=yes, ai-train=yes, use=reference`、nginx 改为静态直出后，公网 `robots.txt` 变成 2208 字节的本站版本。`ai-train=yes` 是对齐落地页原文「Repost it, quote it, train on it — no permission needed」，改前的 `ai-train=no` 与产品自身声明冲突。
 
-**中途差点误判的一件事，记下来**：部署后第一次按 UA 批量复测，出现了「浏览器 UA 拿到 2208 干净版、`GPTBot`/`OAI-SearchBot`/`Perplexity-User` 拿到 3437 禁 AI 版」的分流假象。继续查：源站直连两种 UA 都是 2208，加随机 query 绕过缓存也是 2208，固定 `GPTBot` UA 连测 12 次全部 2208 / 0 条 Disallow。**判定为 Cloudflare 边缘旧副本残留，不是按 UA 动态注入。** 判据：单次 curl 结果不能用来判定 robots，必须多 UA × 多次 × 带 cachebuster 交叉验证。
+**中途的三次反复，如实记录**：部署后一段时间内，同一个 URL 观测到三种响应：
 
-即便如此，CF 控制台里若仍开着 AI bot blocking / 托管 robots，配置变更后可能重新生成。第五节第 1 条是防复发动作，不是本次的补救动作。
+| 响应 | 大小 | Disallow | 出现时机 |
+|---|---|---|---|
+| 纯 CF 托管版 | 3437 | 45 | 改前 + 改后最初按 UA 批量复测时 |
+| **拼接版**（CF 托管块 + 本站 robots） | 5467 | 45 | 随后一轮 15 次连续采样，带随机 cachebuster 也一样 |
+| **本站纯净版** | 2208 | 0 | 其余绝大多数请求 |
+
+排除过程：源站直连（绕过 CF）任意 UA 恒为 2208；带/不带 query 对照 12 次恒为 2208；固定 `GPTBot` 连测 12 次全 2208 / 0 条；再连测 30 次（含响应头）全 2208 / 0 条。**最终连续 50+ 次稳定为纯净版。**
+
+机制**不做断言**：可能是 CF 托管规则在配置收敛期内不同边缘节点状态不一致，也可能是托管块与源站响应的缓存拼接。可以确定的是：① 当前生效；② 单次 curl 不能用来判定 robots；③ 只要 CF 控制台里 AI bot blocking / 托管 robots 还开着，未来配置变更就可能重新生成。所以第五节第 1 条不是可选项，是防复发动作。
+
+**监控判据**：任何一次采到 `Disallow > 0` 或大小 ≠ 2208，立刻去 CF 控制台关 AI bot blocking + Purge Everything，再重跑第七节命令 1。
 
 ### 3.2 拆页这一步不能照搬，因为产品红线
 
@@ -106,7 +116,7 @@ nginx `agentmeets.conf` 的 443 server 里，在 `location /` 之前插入 4 个
 
 | # | 动作 | 精确位置 | 为什么必须 |
 |---|---|---|---|
-| 1 | **Cloudflare：关掉 AI bot blocking + Purge 缓存** | 控制台 → `agentmeets.club` → `Bots` / `AI bot blocking` / `Managed robots.txt`：把「Block AI bots」置为 Allow/Off，删掉托管 robots 块；再到 `Caching` → `Purge Everything`（或只 purge `/robots.txt`） | **当前已生效**（连测 12 次 0 条 Disallow）。这步是防复发 + 清掉边缘旧副本。旧副本曾短暂返回 3437 字节的禁 AI 版，见 3.1 节 |
+| 1 | **Cloudflare：关掉 AI bot blocking + Purge 缓存** | 控制台 → `agentmeets.club` → `Bots` / `AI bot blocking` / `Managed robots.txt`：把「Block AI bots」置为 Allow/Off，删掉托管 robots 块；再到 `Caching` → `Purge Everything`（或只 purge `/robots.txt`） | **当前已生效**（连续 50+ 次 0 条 Disallow）。但这不是可选项：曾观测到 3437 / 5467 两种带 45 条 Disallow 的托管版，见 3.1 节。关开关才能防止配置变更后复发 |
 | 2 | **Bing Webmaster Tools 验证站点 + 提交 sitemap**（最高优先） | `https://www.bing.com/webmasters` → 添加 `https://www.agentmeets.club/sitemap.xml` | Bing 索引同时喂 Copilot 与 ChatGPT 的检索层。再做 GSC、百度搜索资源平台、搜狗站长 |
 | 3 | **看 AI Performance / grounding queries** | Bing WMT → AI Performance；GSC → 生成式 AI 报告 | 直接暴露 AI 用什么检索词找到你，拿原词当标题，不用猜关键词 |
 | 4 | **push 本地改动到 GitHub** | 本机沙箱 `git ls-remote` 返回 `CONNECT tunnel failed 502`，推不动；需你手动 push 或批准直连 | 让 `SKILL.md` 实体定义和修好的 `mcp.json` 进公开仓库（A 管道全靠它） |
@@ -131,8 +141,9 @@ nginx `agentmeets.conf` 的 443 server 里，在 `location /` 之前插入 4 个
 ## 七、验收命令（可复制）
 
 ```bash
-# 1. robots 是否仍被注入（期望：第一行是本站注释，Disallow 计数为 0）
-#    必须连测，单次结果可能是 CF 边缘旧缓存
+# 1. robots 是否仍被注入（期望：2208b / Disallow=0 / 第一行是本站注释）
+#    必须连测，单次结果不可信；出现 3437 或 5467 说明 CF 托管块又回来了，
+#    立刻执行第五节第 1 条（关 AI bot blocking + Purge Everything）
 curl -s https://www.agentmeets.club/robots.txt | head -3
 for i in 1 2 3 4 5; do
   printf '#%d ' "$i"
