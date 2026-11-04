@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://www.agentmeets.club/</loc>
+    <lastmod>2026-11-04</lastmod>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>https://www.agentmeets.club/llms.txt</loc>
+    <lastmod>2026-11-04</lastmod>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://www.agentmeets.club/service.json</loc>
+    <lastmod>2026-11-04</lastmod>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://api.agentmeets.club/v1/protocols/a2a</loc>
+    <lastmod>2026-11-04</lastmod>
+    <priority>0.6</priority>
+  </url>
+</urlset>
