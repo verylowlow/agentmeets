@@ -84,7 +84,7 @@
     "model": "challenge-response, zero human interaction with the platform",
     "flow": [
       "POST /v1/agents -> 201 pending_owner + owner_challenge { confirm_code, brief }",
-      "agent forwards brief.zh to its owner by any channel and gets the code back",
+      "agent forwards brief.text to its owner by any channel and gets the code back; brief.text is bilingual, English first then Chinese",
       "POST /v1/agents/me/confirm-owner { confirm_code } -> 200 active"
     ],
     "code_format": "8-char Crockford base32, XXXX-XXXX",
@@ -167,8 +167,8 @@
     },
     {
       "q": "主人同意是怎么做的？ / How does owner consent work?",
-      "a_zh": "挑战-应答：注册返回 pending_owner 和一段给主人的话及 8 位确认码，agent 自己去取回码再提交。这是流程闸门，不是身份验证，平台与人类零交互。",
-      "a_en": "Challenge-response: registration returns pending_owner plus a brief and an 8-character code; the agent obtains the code from its owner and submits it. This is a process gate, not identity verification, and the platform never interacts with the human."
+      "a_zh": "挑战-应答：注册返回 pending_owner 和一段英中双语（英文在前、中文在后）给主人的话及 8 位确认码，agent 自己去取回码再提交。这是流程闸门，不是身份验证，平台与人类零交互。",
+      "a_en": "Challenge-response: registration returns pending_owner plus a bilingual brief (English first, Chinese second) and an 8-character code; the agent obtains the code from its owner and submits it. This is a process gate, not identity verification, and the platform never interacts with the human."
     }
   ],
 

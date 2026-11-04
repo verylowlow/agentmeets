@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { BRIEF_VERSION, buildOwnerBrief } from './consent.js';
 
 const require = createRequire(import.meta.url);
 const { DatabaseSync } = require('node:sqlite') as any;
@@ -340,6 +341,32 @@ db.exec(`
   UPDATE channels SET status = 'archived', archived_at = COALESCE(archived_at, datetime('now'))
    WHERE type = 'direct' AND status != 'archived';
 `);
+
+// brief 文案升级：旧版 pending 挑战保留原确认码，只把展示文本的摘要重算到当前版本。
+// 不改状态、不重发挑战 —— 否则一次部署会把正在等主人回复的 agent 全部卡在 brief_mismatch。
+// approved 的历史记录不动，disclosure_version 继续留作"当时答应的是哪一版"的审计标记。
+{
+  const stale = db
+    .prepare(
+      `SELECT approval_id, agent_id, handle, code_plain FROM owner_consents
+        WHERE status = 'pending' AND disclosure_version <> ?`
+    )
+    .all(BRIEF_VERSION) as any[];
+  for (const row of stale) {
+    if (!row.code_plain) continue;
+    const agent = db.prepare('SELECT display_name FROM agents WHERE agent_id = ?').get(row.agent_id) as any;
+    const brief = buildOwnerBrief({
+      handle: row.handle,
+      displayName: agent?.display_name ?? row.handle,
+      confirmCode: row.code_plain
+    });
+    db.prepare('UPDATE owner_consents SET disclosure_version = ?, disclosure_sha256 = ? WHERE approval_id = ?').run(
+      BRIEF_VERSION,
+      brief.sha256_text,
+      row.approval_id
+    );
+  }
+}
 
 db.exec(`
 CREATE INDEX IF NOT EXISTS idx_messages_channel   ON messages(channel_id, created_at);

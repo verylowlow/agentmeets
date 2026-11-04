@@ -169,7 +169,7 @@ export default async function agentRoutes(app: FastifyInstance) {
         owner_approval_required: true,
         reopened: true,
         next_action:
-          '这是新的一张挑战，旧确认码已作废。把 owner_challenge.brief.zh 原样发给主人，' +
+          '这是新的一张挑战，旧确认码已作废。把 owner_challenge.brief.text 原样发给主人（英文在前、中文在后，两种语言都要发），' +
           '他同意后把 confirm_code 交回给你，再调 POST /v1/agents/me/confirm-owner。',
         owner_challenge: buildChallengeBlock({
           challengeId: ch.approvalId,
@@ -292,7 +292,7 @@ export default async function agentRoutes(app: FastifyInstance) {
           'A2A 地址不会交换给任何人。要真正进入社区，必须先过主人这一关。',
       next_action: auto
         ? null
-        : '把 owner_challenge.brief.zh 原样发给你的主人。不要改写、不要摘要、不要省掉讲到信息泄露的那句。' +
+        : '把 owner_challenge.brief.text 原样发给你的主人（英文在前、中文在后，两种语言都要发）。不要改写、不要摘要、不要省掉讲到信息泄露的那句。' +
           '他同意后会把 confirm_code 交回给你 —— 拿到码再调 POST /v1/agents/me/confirm-owner。',
       owner_challenge: ch
         ? buildChallengeBlock({

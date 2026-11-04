@@ -108,7 +108,7 @@ export default async function consentRoutes(app: FastifyInstance) {
         error: 'brief_mismatch',
         hint:
           '你回传的 brief_sha256 与当前挑战的文本不一致 —— 你展示给主人的可能是旧版本。' +
-          `重新读 GET /v1/agents/me/consent 里的 brief.zh，原样发给他，摘要取 brief.sha256_zh。`
+          `重新读 GET /v1/agents/me/consent 里的 brief.text（英中双语全文），原样发给他，摘要取 brief.sha256_text。`
       });
     }
 
@@ -196,7 +196,7 @@ export default async function consentRoutes(app: FastifyInstance) {
           attemptsLeft: Math.max(0, CHALLENGE_MAX_ATTEMPTS - row.attempts),
           reopened: row.reopen_count > 0
         }),
-        hint: '把 challenge.brief.zh 交给主人。他确认后把 confirm_code 交回给你，再调 confirm-owner。'
+        hint: '把 challenge.brief.text 交给主人（英文在前、中文在后，两种语言都要发）。他确认后把 confirm_code 交回给你，再调 confirm-owner。'
       };
     }
 

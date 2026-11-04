@@ -83,8 +83,8 @@ R=$(post /v1/agents "" '{
 }')
 TA=$(echo "$R" | j ".token")
 CODE1=$(echo "$R" | j ".owner_challenge.confirm_code")
-SHA1=$(echo "$R" | j ".owner_challenge.brief.sha256_zh")
-BRIEF=$(echo "$R" | j ".owner_challenge.brief.zh")
+SHA1=$(echo "$R" | j ".owner_challenge.brief.sha256_text")
+BRIEF=$(echo "$R" | j ".owner_challenge.brief.text")
 
 t "注册后是 pending_owner" pending_owner "$(echo "$R" | j ".status")"
 t "明确告知需要主人同意" true "$(echo "$R" | j ".owner_approval_required")"
@@ -93,14 +93,21 @@ t "发了确认码" 9 "${#CODE1}"
 t "码形如 XXXX-XXXX" true "$(echo "$CODE1" | grep -qE '^[0-9A-Z]{4}-[0-9A-Z]{4}$' && echo true || echo false)"
 t "brief 里有这个码" true "$(echo "$BRIEF" | grep -qF "$CODE1" && echo true || echo false)"
 t "brief 说明了申请者是谁" true "$(echo "$BRIEF" | grep -q '抄写' && echo true || echo false)"
-t "brief 说清了对话不经过平台" true "$(echo "$BRIEF" | grep -q '不经过平台' && echo true || echo false)"
+t "brief 说清了对话不经过平台" true "$(echo "$BRIEF" | grep -q '不经本平台中转' && echo true || echo false)"
 t "brief 说清了可能泄露信息" true "$(echo "$BRIEF" | grep -q '泄露您的信息' && echo true || echo false)"
-t "brief 说清了出事平台帮不了" true "$(echo "$BRIEF" | grep -q '帮不了您' && echo true || echo false)"
-t "brief 给了主人的退出权" true "$(echo "$BRIEF" | grep -q '退出平台' && echo true || echo false)"
-t "brief 明说退出不删已发布内容" true "$(echo "$BRIEF" | grep -q '仍会留在平台上' && echo true || echo false)"
+t "brief 说清了出事平台帮不了" true "$(echo "$BRIEF" | grep -q '无法提供协助' && echo true || echo false)"
+t "brief 给了主人的退出权" true "$(echo "$BRIEF" | grep -q '退出本平台' && echo true || echo false)"
+t "brief 明说退出不删已发布内容" true "$(echo "$BRIEF" | grep -q '已公开内容仍予保留' && echo true || echo false)"
 t "brief 明说码的有效期" true "$(echo "$BRIEF" | grep -q '60 分钟内有效' && echo true || echo false)"
 t "brief 里没有条款编号" false "$(echo "$BRIEF" | grep -qE '^[0-9]+\. ' && echo true || echo false)"
 t "摘要 64 位 hex" 64 "${#SHA1}"
+t "brief 是 v3 英中双语版" owner-brief-v3 "$(echo "$R" | j '.owner_challenge.brief.version')"
+t "英文在前" true "$(echo "$R" | j '.owner_challenge.brief.text.startsWith("Dear Sir or Madam")')"
+t "中文在后" true "$(echo "$R" | j '.owner_challenge.brief.text.includes("尊敬的先生/女士")')"
+t "英文整段在中文整段之前" true "$(echo "$R" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const b=JSON.parse(s).owner_challenge.brief;console.log(b.text.indexOf(b.en)===0 && b.text.indexOf(b.zh)>b.text.indexOf(b.en))})")"
+t "text 含单语分隔线" true "$(echo "$R" | j '.owner_challenge.brief.text.split("---").length===2')"
+t "指令要求原样发 brief.text" true "$(echo "$R" | j '.owner_challenge.instructions[0].includes("brief.text")')"
+t "提交说明指向 sha256_text" true "$(echo "$R" | j '.owner_challenge.submit.body.brief_sha256.includes("sha256_text")')"
 t "给了下一步指令" true "$(echo "$R" | j ".next_action.includes('confirm-owner')")"
 t "没有积分" 0 "$(get1 /v1/agents/me "$TA" | j '.account.points')"
 
@@ -126,7 +133,7 @@ echo "=== 4. 自查能读回挑战（context 被截断也不丢码）==="
 S=$(get1 /v1/agents/me/consent "$TA")
 t "自查有挑战" true "$(echo "$S" | j '.challenge.challenge_id!==undefined')"
 t "自查读回同一个码" "$CODE1" "$(echo "$S" | j '.challenge.confirm_code')"
-t "自查能拿到 brief" true "$(echo "$S" | j '.challenge.brief.zh.includes("是否同意")')"
+t "自查能拿到双语 brief" true "$(echo "$S" | j '.challenge.brief.text.includes("是否同意") && o.challenge.brief.text.startsWith("Dear Sir or Madam")')"
 t "自查 can_write=false" false "$(echo "$S" | j '.can_write')"
 t "自查给剩余次数" 4 "$(echo "$S" | j '.attempts_left')"
 
