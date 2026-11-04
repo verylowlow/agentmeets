@@ -10,7 +10,7 @@
 
 | 指标 | 改前 | 改后 | 验证方式 |
 |---|---|---|---|
-| `robots.txt` 中 `Disallow` 规则 | **约 50 条，全部 AI 爬虫被禁** | **0 条** | `curl .../robots.txt \| grep -c '^Disallow'` |
+| `robots.txt` 中 `Disallow` 规则 | **45 条，全部 AI 爬虫被禁** | **0 条**（固定 UA 连测 12 次全为 0） | 见第七节验收命令 1、2 |
 | `Content-Signal` | `search=yes, ai-train=no`，无 `ai-input` | `search=yes, ai-input=yes, ai-train=yes, use=reference` | 同上 |
 | 静态可见中文（不执行 JS） | **0 字** | **1007 字** | 去 `<script>/<style>` 后统计 |
 | 静态可见英文词 | 366 | 2646 | 同上 |
@@ -53,11 +53,15 @@
 
 ### 3.1 最大的阻断不是内容，是 robots
 
-改前线上 `robots.txt` 是 3437 字节，开头 `BEGIN Cloudflare Managed content`，`GPTBot`、`Claude-User`、`ChatGPT-User`、`Perplexity-User`、`Baiduspider`、`Bytespider`、`Kimi-User`、`Google-Agent` 等全部 `Disallow: /`。源站直连拿到的却是干净的 `User-agent: * Allow: /`。**即 Cloudflare 的托管 Content Signals 在边缘往源站 robots 前面注入了一整块禁 AI 规则。**
+改前线上 `robots.txt` 是 3437 字节，开头 `BEGIN Cloudflare Managed content`，45 条 `Disallow`，`GPTBot`、`Claude-User`、`ChatGPT-User`、`Perplexity-User`、`Baiduspider`、`Bytespider`、`Kimi-User`、`Google-Agent` 等全部被禁。源站直连拿到的却是干净的 `User-agent: * Allow: /`。**即 Cloudflare 的托管 Content Signals 在边缘生成的 robots 覆盖/前置了源站版本。**
 
 伪装这些 UA 实测边缘返回 200，说明 CF 只做了 robots 声明、没有在 WAF 层硬拦；但爬虫会遵守 robots，等于主动拒绝全部 AI 检索。
 
-源站改写 robots 并显式声明 `Content-Signal: search=yes, ai-input=yes, ai-train=yes, use=reference` 后，公网 `robots.txt` 变成 2208 字节的本站版本，注入块消失。推断机制是 CF 只在源站未自带 Content-Signal 时注入默认块；**实测结果确定，机制属推断**。另外 `ai-train=yes` 是对齐落地页原文「Repost it, quote it, train on it — no permission needed」，改前的 `ai-train=no` 与产品自身声明冲突。
+源站改写 robots 并显式声明 `Content-Signal: search=yes, ai-input=yes, ai-train=yes, use=reference`、nginx 改为静态直出后，公网 `robots.txt` 变成 2208 字节的本站版本。`ai-train=yes` 是对齐落地页原文「Repost it, quote it, train on it — no permission needed」，改前的 `ai-train=no` 与产品自身声明冲突。
+
+**中途差点误判的一件事，记下来**：部署后第一次按 UA 批量复测，出现了「浏览器 UA 拿到 2208 干净版、`GPTBot`/`OAI-SearchBot`/`Perplexity-User` 拿到 3437 禁 AI 版」的分流假象。继续查：源站直连两种 UA 都是 2208，加随机 query 绕过缓存也是 2208，固定 `GPTBot` UA 连测 12 次全部 2208 / 0 条 Disallow。**判定为 Cloudflare 边缘旧副本残留，不是按 UA 动态注入。** 判据：单次 curl 结果不能用来判定 robots，必须多 UA × 多次 × 带 cachebuster 交叉验证。
+
+即便如此，CF 控制台里若仍开着 AI bot blocking / 托管 robots，配置变更后可能重新生成。第五节第 1 条是防复发动作，不是本次的补救动作。
 
 ### 3.2 拆页这一步不能照搬，因为产品红线
 
@@ -102,7 +106,7 @@ nginx `agentmeets.conf` 的 443 server 里，在 `location /` 之前插入 4 个
 
 | # | 动作 | 精确位置 | 为什么必须 |
 |---|---|---|---|
-| 1 | **确认 Cloudflare 的 AI 爬虫设置不再注入** | Cloudflare 控制台 → `agentmeets.club` → 侧栏 `Content` / `Bots` / `AI bot blocking` / `Managed robots.txt`。若存在「Block AI bots」开关，置为 Allow/Off；若存在自定义 robots.txt，删掉托管块 | 防止某次 CF 配置变更后注入复发。复发判据见下方验收命令 |
+| 1 | **Cloudflare：关掉 AI bot blocking + Purge 缓存** | 控制台 → `agentmeets.club` → `Bots` / `AI bot blocking` / `Managed robots.txt`：把「Block AI bots」置为 Allow/Off，删掉托管 robots 块；再到 `Caching` → `Purge Everything`（或只 purge `/robots.txt`） | **当前已生效**（连测 12 次 0 条 Disallow）。这步是防复发 + 清掉边缘旧副本。旧副本曾短暂返回 3437 字节的禁 AI 版，见 3.1 节 |
 | 2 | **Bing Webmaster Tools 验证站点 + 提交 sitemap**（最高优先） | `https://www.bing.com/webmasters` → 添加 `https://www.agentmeets.club/sitemap.xml` | Bing 索引同时喂 Copilot 与 ChatGPT 的检索层。再做 GSC、百度搜索资源平台、搜狗站长 |
 | 3 | **看 AI Performance / grounding queries** | Bing WMT → AI Performance；GSC → 生成式 AI 报告 | 直接暴露 AI 用什么检索词找到你，拿原词当标题，不用猜关键词 |
 | 4 | **push 本地改动到 GitHub** | 本机沙箱 `git ls-remote` 返回 `CONNECT tunnel failed 502`，推不动；需你手动 push 或批准直连 | 让 `SKILL.md` 实体定义和修好的 `mcp.json` 进公开仓库（A 管道全靠它） |
@@ -128,8 +132,14 @@ nginx `agentmeets.conf` 的 443 server 里，在 `location /` 之前插入 4 个
 
 ```bash
 # 1. robots 是否仍被注入（期望：第一行是本站注释，Disallow 计数为 0）
+#    必须连测，单次结果可能是 CF 边缘旧缓存
 curl -s https://www.agentmeets.club/robots.txt | head -3
-curl -s https://www.agentmeets.club/robots.txt | grep -c '^Disallow'
+for i in 1 2 3 4 5; do
+  printf '#%d ' "$i"
+  curl -s -A "GPTBot" "https://www.agentmeets.club/robots.txt?cb=$RANDOM" \
+    -o /tmp/rb.txt -w '%{size_download}b '
+  echo "Disallow=$(grep -c '^Disallow' /tmp/rb.txt)"
+done
 
 # 2. 四个端点
 for p in / /robots.txt /sitemap.xml /service.json /c4d0401ced19e5caab67e9c5df640307.txt; do
