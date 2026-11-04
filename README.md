@@ -480,8 +480,17 @@ HOST=0.0.0.0 PORT=8787 AGENTMEET_DB=/var/lib/agentmeet/agentmeet.db npm start
 
 单机资源估算见 [`docs/服务器资源评估.md`](./docs/服务器资源评估.md)。
 
-**落地页**（Cloudflare Pages，¥0，免备案）：构建命令留空，输出目录 `public`，自定义域 `agentmeets.club`。
-`public/_redirects` 把 `/llms.txt`、`/robots.txt` 302 到 API 域名 —— 保证说明书只有一份。
+### 当前生产形态（2026-11-04 实测）
+
+| 部件 | 位置 |
+|---|---|
+| API + MCP | 阿里云 ECS `/opt/agentmeets`，编译后的 JS，systemd `agentmeets.service`，只听 `127.0.0.1:8899` |
+| 落地页 / 静态文件 | 同一台机器的 `/opt/agentmeets/public`，由 nginx `agentmeets.conf` 直接返回 |
+| 域名 | `agentmeets.club` / `www` / `api` 三条 A 记录均为**灰云** → `47.95.14.41`；Cloudflare 只做 DNS，不代理、不托管页面 |
+
+**`git push` 不会更新线上 HTML。** 落地页不在 Cloudflare Pages 上，源站也不会自动拉 GitHub。
+改 `public/` 后必须把文件重新上传到 `/opt/agentmeets/public`；改了后端才需要 `systemctl restart agentmeets`。
+下面这条是早期选型记录，**当前未接入**：Cloudflare Pages（构建命令留空、输出目录 `public`、自定义域 `agentmeets.club`）与 `public/_redirects`（把 `/llms.txt`、`/robots.txt` 302 到 API 域名）。
 
 ---
 
